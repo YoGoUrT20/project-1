@@ -1,42 +1,84 @@
-name: CI
-on:
-  push:
-    branches: [ main ]
+# Dockerfile for providing Buildozer
+#
+# Build with:
+#   docker build --tag=kivy/buildozer .
+#
+# For macOS using Docker Desktop:
+#   docker buildx build --platform=linux/amd64 -t kivy/buildozer .
+#
+# To run (e.g. to check the version):
+#   docker run \
+#     --volume "$HOME/.buildozer":/home/user/.buildozer \
+#     --volume "$PWD":/home/user/hostcwd \
+#     kivy/buildozer --version
+#
+# For an interactive shell:
+#   docker run --interactive --tty --rm \
+#     --volume "$HOME/.buildozer":/home/user/.buildozer \
+#     --volume "$PWD":/home/user/hostcwd \
+#     --entrypoint /bin/bash \
+#     kivy/buildozer
+#
+# If you get a PermissionError on /home/user/.buildozer/cache,
+# adjust the permissions with:
+#   sudo chown $USER -R ~/.buildozer
+# or recreate the directory.
 
-jobs:
-  build:
-    runs-on: ubuntu-20.04
+FROM ubuntu:22.04
 
-    steps:
-      - uses: actions/checkout@v4
+# Set up environment variables
+ENV USER=user \
+    HOME_DIR=/home/user \
+    WORK_DIR=/home/user/hostcwd \
+    SRC_DIR=/home/user/src \
+    PATH=/home/user/.local/bin:$PATH
 
-      # Used to cache dependencies with a timeout
-      - name: Get Date
-        id: get-date
-        run: echo "date=$(date -u +%Y%m%d)" >> $GITHUB_ENV
-        shell: bash
+# Configure locale
+RUN apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -qq --yes --no-install-recommends locales && \
+    locale-gen en_US.UTF-8 && \
+    rm -rf /var/lib/apt/lists/*
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
 
-      - name: Cache Buildozer global directory
-        uses: actions/cache@v4
-        with:
-          path: .buildozer_global
-          key: buildozer-global-${{ hashFiles('buildozer.spec') }}
+# Install system dependencies
+RUN apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -qq --yes --no-install-recommends \
+        autoconf \
+        automake \
+        build-essential \
+        ccache \
+        cmake \
+        gettext \
+        git \
+        libffi-dev \
+        libltdl-dev \
+        libssl-dev \
+        libtool \
+        openjdk-17-jdk \
+        patch \
+        pkg-config \
+        python3-pip \
+        python3-setuptools \
+        sudo \
+        unzip \
+        zip \
+        zlib1g-dev && \
+    rm -rf /var/lib/apt/lists/*
 
-      - name: Cache Buildozer directory
-        uses: actions/cache@v4
-        with:
-          path: .buildozer
-          key: ${{ runner.os }}-${{ env.date }}-${{ hashFiles('buildozer.spec') }}
+# Create a non-root user with sudo privileges
+RUN useradd --create-home --shell /bin/bash ${USER} && \
+    usermod -aG sudo ${USER} && \
+    echo "%sudo ALL=(ALL) NOPASSWD: ALL" | sudo tee -a /etc/sudoers
 
-      - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
-        with:
-          command: buildozer android debug
-          buildozer_version: stable
+USER ${USER}
+WORKDIR ${WORK_DIR}
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: package
-          path: ${{ steps.buildozer.outputs.filename }}
+# Copy the source code into the container (if needed)
+COPY --chown=user:user . ${SRC_DIR}
+
+# Install Buildozer and its dependencies via pip
+RUN pip3 install --user --upgrade "Cython<3.0" wheel pip ${SRC_DIR}
+
+ENTRYPOINT ["buildozer"]

@@ -1,84 +1,50 @@
-# Dockerfile for providing Buildozer
-#
-# Build with:
-#   docker build --tag=kivy/buildozer .
-#
-# For macOS using Docker Desktop:
-#   docker buildx build --platform=linux/amd64 -t kivy/buildozer .
-#
-# To run (e.g. to check the version):
-#   docker run \
-#     --volume "$HOME/.buildozer":/home/user/.buildozer \
-#     --volume "$PWD":/home/user/hostcwd \
-#     kivy/buildozer --version
-#
-# For an interactive shell:
-#   docker run --interactive --tty --rm \
-#     --volume "$HOME/.buildozer":/home/user/.buildozer \
-#     --volume "$PWD":/home/user/hostcwd \
-#     --entrypoint /bin/bash \
-#     kivy/buildozer
-#
-# If you get a PermissionError on /home/user/.buildozer/cache,
-# adjust the permissions with:
-#   sudo chown $USER -R ~/.buildozer
-# or recreate the directory.
+name: CI
 
-FROM ubuntu:22.04
+on:
+  push:
+    branches:
+      - main
 
-# Set up environment variables
-ENV USER=user \
-    HOME_DIR=/home/user \
-    WORK_DIR=/home/user/hostcwd \
-    SRC_DIR=/home/user/src \
-    PATH=/home/user/.local/bin:$PATH
+jobs:
+  build:
+    runs-on: ubuntu-20.04
 
-# Configure locale
-RUN apt-get update -qq && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -qq --yes --no-install-recommends locales && \
-    locale-gen en_US.UTF-8 && \
-    rm -rf /var/lib/apt/lists/*
-ENV LANG=en_US.UTF-8 \
-    LANGUAGE=en_US:en \
-    LC_ALL=en_US.UTF-8
+    steps:
+      # Check out your repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-# Install system dependencies
-RUN apt-get update -qq && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -qq --yes --no-install-recommends \
-        autoconf \
-        automake \
-        build-essential \
-        ccache \
-        cmake \
-        gettext \
-        git \
-        libffi-dev \
-        libltdl-dev \
-        libssl-dev \
-        libtool \
-        openjdk-17-jdk \
-        patch \
-        pkg-config \
-        python3-pip \
-        python3-setuptools \
-        sudo \
-        unzip \
-        zip \
-        zlib1g-dev && \
-    rm -rf /var/lib/apt/lists/*
+      # Set up Docker Buildx (ensures multi-platform builds are supported)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-# Create a non-root user with sudo privileges
-RUN useradd --create-home --shell /bin/bash ${USER} && \
-    usermod -aG sudo ${USER} && \
-    echo "%sudo ALL=(ALL) NOPASSWD: ALL" | sudo tee -a /etc/sudoers
+      # Build your custom Buildozer Docker image from your Dockerfile
+      - name: Build Buildozer Docker image
+        run: |
+          docker build --platform linux/amd64 -t kivy/buildozer .
 
-USER ${USER}
-WORKDIR ${WORK_DIR}
+      # Run Buildozer inside the container to build your Android APK
+      #
+      # Here we mount:
+      # - the GitHub workspace into /home/user/src so that the container has your source (and buildozer.spec)
+      # - a temporary directory for Buildozer’s cache (~/.buildozer)
+      #
+      # The working directory (-w) is set to /home/user/src (where your source is)
+      - name: Run Buildozer to build APK
+        run: |
+          docker run --rm \
+            -w /home/user/src \
+            -v "${{ github.workspace }}:/home/user/src" \
+            -v "${{ runner.temp }}/.buildozer:/home/user/.buildozer" \
+            kivy/buildozer buildozer android debug
 
-# Copy the source code into the container (if needed)
-COPY --chown=user:user . ${SRC_DIR}
+      # (Optional) List output files so you can verify that the APK was generated.
+      - name: List output files
+        run: ls -la "${{ github.workspace }}/bin"
 
-# Install Buildozer and its dependencies via pip
-RUN pip3 install --user --upgrade "Cython<3.0" wheel pip ${SRC_DIR}
-
-ENTRYPOINT ["buildozer"]
+      # Upload the generated APK artifact (adjust the path as needed)
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: ${{ github.workspace }}/bin/*.apk
